@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Escáner de códigos</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#f4f5f7;color:#222}
+h1{font-size:1.3rem;margin:4px 0 12px}
+.card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+label{display:block;font-size:.9rem;margin:10px 0 4px;color:#555}
+input,select,textarea{width:100%;box-sizing:border-box;font-size:1.05rem;padding:10px;border:1px solid #ccc;border-radius:8px;background:#fff}
+button{width:100%;font-size:1.05rem;padding:12px;border:0;border-radius:8px;background:#1565c0;color:#fff;margin-top:10px}
+button.sec{background:#546e7a}
+button:disabled{opacity:.5}
+#reader{width:100%}
+#msg{padding:10px;border-radius:8px;margin-top:10px;display:none}
+.ok{background:#e8f5e9;color:#1b5e20}.err{background:#ffebee;color:#b71c1c}.info{background:#e3f2fd;color:#0d47a1}
+</style>
+</head>
+<body>
+<h1>Escáner de códigos</h1>
+<div class="card">
+  <button id="btnCam" class="sec" type="button">Activar cámara para escanear</button>
+  <div id="reader"></div>
+  <p style="font-size:.85rem;color:#666">Lee códigos EAN-13 y Code 128.</p>
+</div>
+<form id="form" class="card" autocomplete="off">
+  <label for="tipo">Tipo</label>
+  <select id="tipo"><option value="Bodega">Bodega</option><option value="Medidor">Medidor</option></select>
+  <label for="codigo">Código</label>
+  <input id="codigo" placeholder="Escanea o escribe a mano" required>
+  <label for="formato">Formato</label>
+  <select id="formato"><option value="Manual">Manual</option><option value="EAN-13">EAN-13</option><option value="Code 128">Code 128</option></select>
+  <label id="lblCant" for="cantidad">Cantidad</label>
+  <input id="cantidad" type="number" min="0" step="any" value="1" required>
+  <label for="usuario">Usuario</label>
+  <input id="usuario" required>
+  <label for="notas">Notas</label>
+  <textarea id="notas" rows="2"></textarea>
+  <button type="submit" id="btnSave">Guardar</button>
+</form>
+<div id="msg"></div>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+const URL_SCRIPT = "https://script.google.com/macros/s/AKfycbzThOgJiVB3gw2PEtTc_EtWKkckVuhtvsiHRHm2Kc_X96ypttG3zqTxRR9IqLW-GXe6/exec";
+const TOKEN = "esc_9f2KQx7LmP4vR8tZ1wB6nJ3sD5hG0aC";
+const HOJA = "Escaneos";
+const $ = id => document.getElementById(id);
+let scanner = null, escaneando = false;
+
+$("usuario").value = localStorage.getItem("usuario") || "";
+
+function actualizarLabel() {
+  $("lblCant").textContent = $("tipo").value === "Medidor" ? "Lectura" : "Cantidad";
+}
+$("tipo").addEventListener("change", actualizarLabel);
+actualizarLabel();
+
+function msg(texto, clase) {
+  const m = $("msg");
+  m.textContent = texto;
+  m.className = clase;
+  m.style.display = "block";
+}
+
+async function pararCamara() {
+  if (scanner) {
+    try { await scanner.stop(); scanner.clear(); } catch (e) {}
+  }
+  escaneando = false;
+  $("btnCam").textContent = "Activar cámara para escanear";
+}
+
+async function alternarCamara() {
+  if (escaneando) { await pararCamara(); return; }
+  if (typeof Html5Qrcode === "undefined") {
+    msg("No se pudo cargar el lector. Revisa la conexión.", "err");
+    return;
+  }
+  scanner = new Html5Qrcode("reader", {
+    formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.CODE_128],
+    verbose: false
+  });
+  try {
+    await scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 260, height: 140 } },
+      onLeido,
+      () => {}
+    );
+    escaneando = true;
+    $("btnCam").textContent = "Detener cámara";
+  } catch (e) {
+    msg("No se pudo abrir la cámara: " + e, "err");
+  }
+}
+
+async function onLeido(texto, resultado) {
+  const fmt = (resultado && resultado.result && resultado.result.format) ? resultado.result.format.formatName : "";
+  $("codigo").value = texto;
+  $("formato").value = /EAN_13/i.test(fmt) ? "EAN-13" : (/CODE_128/i.test(fmt) ? "Code 128" : "Manual");
+  if (navigator.vibrate) navigator.vibrate(120);
+  await pararCamara();
+  msg("Código leído: " + texto, "info");
+}
+
+$("btnCam").addEventListener("click", alternarCamara);
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const usuario = $("usuario").value.trim();
+  localStorage.setItem("usuario", usuario);
+  const datos = {
+    token: TOKEN,
+    hoja: HOJA,
+    fecha: new Date().toISOString(),
+    tipo: $("tipo").value,
+    codigo: $("codigo").value.trim(),
+    formato: $("formato").value,
+    cantidad: $("cantidad").value,
+    usuario: usuario,
+    notas: $("notas").value.trim()
+  };
+  $("btnSave").disabled = true;
+  msg("Guardando...", "info");
+  try {
+    const r = await fetch(URL_SCRIPT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(datos)
+    });
+    const j = await r.json();
+    if (j.ok) {
+      msg("Guardado en la hoja.", "ok");
+      $("codigo").value = "";
+      $("notas").value = "";
+      $("cantidad").value = "1";
+    } else {
+      msg("Error: " + (j.error || "desconocido"), "err");
+    }
+  } catch (err) {
+    msg("No se pudo enviar: " + err, "err");
+  } finally {
+    $("btnSave").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
